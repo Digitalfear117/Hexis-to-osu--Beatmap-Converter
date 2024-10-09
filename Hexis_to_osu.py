@@ -243,9 +243,9 @@ def convert_to_osu(data, output_file):
         f.write("[Events]\n")
         f.write("//Background and Video events\n")
         for event in data['background_events']:
-            f.write(f"{event}\n")  # Write each background event
+            f.write(f"{event}\n")
         f.write("//Break Periods\n")
-        for b in data['break_periods']:  # Changed from 'breaks' to 'break_periods'
+        for b in data['break_periods']:
             f.write(f"{b}\n")
         f.write("//Storyboard Layer 0 (Background)\n")
         f.write("//Storyboard Layer 1 (Fail)\n")
@@ -257,18 +257,25 @@ def convert_to_osu(data, output_file):
         
         # Write [TimingPoints] section
         f.write("[TimingPoints]\n")
-        current_bpm = None
         for timing in timing_points:
             inherited = timing.get('inherited', 'true')
             offset = timing['offset']
+            slider_multiplier = float(timing.get('slider_multiplier', 1.0))  # Slider multiplier for inherited points
+            sample_set = timing.get('sampleSet', '1')  # Get the sample set
+            volume = timing.get('volume', '100')
+            special = 1 if timing.get('special', 'false') == 'true' else 0
+
             if inherited == 'false':  # Non-inherited timing point, use its BPM
                 current_bpm = float(timing.get('bpm', 128))
                 ms_per_beat = 60000 / current_bpm  # Convert BPM to ms/beat
-                special = 1 if timing.get('special', 'false') == 'true' else 0
-                f.write(f"{offset},{ms_per_beat},{timing.get('slider_multiplier', 1)},1,0,{timing.get('volume', 100)},1,{special}\n")
-            else:  # Inherited timing point
-                special = 1 if timing.get('special', 'false') == 'true' else 0
-                f.write(f"{offset},-100,{timing.get('slider_multiplier', 1)},1,0,{timing.get('volume', 100)},0,{special}\n")
+                f.write(f"{offset},{ms_per_beat},1,1,{sample_set},{volume},1,{special}\n")
+            else:  # Inherited timing point (slider velocity control)
+                # Adjust second column based on sliderMultiplier
+                if slider_multiplier != 1.0:
+                    ms_per_beat = -100 / slider_multiplier
+                else:
+                    ms_per_beat = -100  # Default value if no change in slider multiplier
+                f.write(f"{offset},{ms_per_beat},1,1,{sample_set},{volume},0,{special}\n")  # Third column is always '1'
         
         # Write [Colours] section
         f.write("\n[Colours]\n")
@@ -287,11 +294,11 @@ def convert_to_osu(data, output_file):
             elif obj_type == 12:  # Spinner
                 f.write(f"{x},{y},{offset},12,{hit_object['hitsound']},{hit_object['end_offset']},0:0:0:0:\n")
             elif obj_type == 128:  # Hold
-                f.write(f"{x},{y},{offset},128,{hit_object['hitsound']},{hit_object['end_offset']},0:0:0:0:\n")
+                f.write(f"{x},{y},{offset},128,{hit_object['hitsound']},{hit_object['end_offset']},0:0:0:0\n")
 
 def main():
-    input_file = "M2U - Masquerade (TheHowl) [Novice].hbxml"
-    output_file = "M2U - Masquerade (TheHowl) [Novice].osu"
+    input_file = "FILE NAME GOES HERE.hbxml"
+    output_file = "FILE NAME GOES HERE.osu"
 
     # Parse the XML file
     data = parse_xml(input_file)
