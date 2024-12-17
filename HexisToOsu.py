@@ -350,8 +350,8 @@ def convert_to_osu(data, output_file):
                 f.write(f"{x},{y},{offset},128,{hit_object['hitsound']},{hit_object['end_offset']},0:0:0:0\n")
 
 def main():
-    input_file = "Drop - Granat (TheHowl) [Pro].hbxml"
-    output_file = "Drop - Granat (TheHowl) [Pro].osu"
+    input_file = "FILE NAME GOES HERE.hbxml"
+    output_file = "FILE NAME GOES HERE.osu"
 
     # Parse the XML file
     data = parse_xml(input_file)
