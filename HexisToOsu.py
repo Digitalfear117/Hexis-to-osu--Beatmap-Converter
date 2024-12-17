@@ -13,6 +13,32 @@ def map_curve_type(curve_type):
     else:
         return "L"  # Default to linear if undefined or unknown
 
+def decode_hitsound(value):
+    # Convert an integer hitsound value into a set of hitsound flags.
+    # 2 = whistle, 4 = finish, 8 = clap
+    # value might be 0,2,4,8,10,12,14 etc.
+    s = set()
+    val = int(value)
+    if val & 2:
+        s.add("whistle")
+    if val & 4:
+        s.add("finish")
+    if val & 8:
+        s.add("clap")
+    return s
+
+def encode_hitsound(hitsound_set):
+    # Encode a set of hitsounds back into an integer.
+    # Always add 16 (Normal) for slider edges as observed in official osu! files.
+    base = 16
+    if "whistle" in hitsound_set:
+        base += 2
+    if "finish" in hitsound_set:
+        base += 4
+    if "clap" in hitsound_set:
+        base += 8
+    return base
+
 def parse_xml(file_path):
     # Load and parse the XML file
     tree = ET.parse(file_path)
@@ -57,7 +83,7 @@ def parse_xml(file_path):
 
     # Extract hit objects
     hit_objects = []
-    first_object = True  # This will track whether we're processing the first object
+    first_object = True
 
     for hit_object_xml in root.findall(".//hit-object"):
         hit_object_type = hit_object_xml.attrib.get("type")
@@ -65,49 +91,73 @@ def parse_xml(file_path):
         x = hit_object_xml.attrib.get("x")
         y = hit_object_xml.attrib.get("y")
         new_combo = hit_object_xml.attrib.get("newCombo", "false") == "true"
+        main_hitsound_val = hit_object_xml.attrib.get("hitsound", "0")
 
-        # Handle different hit object types
         if hit_object_type == "1":  # Circle
-            object_type = 1 if first_object or not new_combo else 5  # Add 4 if newCombo and not first object
+            object_type = 1 if first_object or not new_combo else 5
             hit_objects.append({
                 "type": object_type,
                 "x": x,
                 "y": y,
                 "offset": offset,
-                "hitsound": hit_object_xml.attrib.get("hitsound", "0")
+                "hitsound": main_hitsound_val
             })
+
         elif hit_object_type == "2":  # Slider
-            object_type = 2 if first_object or not new_combo else 6  # Add 4 if newCombo and not first object
-            points = [(hit_object_xml.attrib["x"], hit_object_xml.attrib["y"])]  # Start point
-            points += [(p.attrib["x"], p.attrib["y"]) for p in hit_object_xml.findall(".//point")]  # Add curve points
-            curve_type = hit_object_xml.attrib.get("curve", "L")  # Get curve type
-            backtracks = int(hit_object_xml.attrib.get("backtracks", "0")) + 1  # Add 1 to backtracks for osu!
+            object_type = 2 if first_object or not new_combo else 6
+            points = [(x, y)]
+            points += [(p.attrib["x"], p.attrib["y"]) for p in hit_object_xml.findall(".//point")]
+            curve_type = hit_object_xml.attrib.get("curve", "L")
+            backtracks = int(hit_object_xml.attrib.get("backtracks", "0")) + 1
             length = hit_object_xml.attrib.get("length")
 
-            # Main hitsound
-            main_hitsound = hit_object_xml.attrib.get("hitsound", "0")
+            endsounds_attr = hit_object_xml.attrib.get("endsounds", "")
+            endsounds_list = endsounds_attr.split("|") if endsounds_attr else []
+            # Number of slider edges = backtracks+1 means number of reverses + head. But we must include tail:
+            # Actually, a slider with 0 backtracks has 2 edges (head and tail).
+            # A slider with n backtracks has n+2 edges.
+            # So the total edges = backtracks + 1 (from code) is actually correct? The code previously assumed that.
+            # Correction: total edges = backtracks + 1 was old logic. Actually:
+            # If backtracks=1, that means 1 repeat, so total edges = 3 (head, reverse, tail).
+            # So total_edges = backtracks + 1 is incorrect. It should be backtracks+2.
+            total_edges = backtracks + 1  # The original code uses (backtracks+1) tries to represent repeats+head?
+            # Let's check official osu logic: For a slider with backtracks=0, endsounds like 8|8 means 2 edges: head and tail.
+            # That means total_edges = backtracks+2. Let's use that.
+            total_edges = backtracks + 2
 
-            # Parse hitsounds for individual parts of the slider
-            hit_sounds = [main_hitsound] * (backtracks + 1)  # Start + backtracks + end
-            individual_hit_sounds = [int(hs.text) for hs in hit_object_xml.findall("hit-sound")]
+            # Parse hitsounds from hit-sound tags:
+            hitsound_tags = hit_object_xml.findall("hit-sound")
+            hitsound_values = [hs.text for hs in hitsound_tags]
 
-            # Ensure length of hitsounds matches slider parts
-            for i in range(len(hit_sounds)):
-                if i < len(individual_hit_sounds):
-                    additional_hitsound = individual_hit_sounds[i]
-                    if additional_hitsound != int(main_hitsound) and additional_hitsound != 0:
-                        hit_sounds[i] = str(int(hit_sounds[i]) + additional_hitsound)
+            # Ensure endsounds_list and hitsound_values match total_edges in length:
+            # If they are shorter, pad with '0' (no hitsound).
+            while len(endsounds_list) < total_edges:
+                endsounds_list.append("0")
+            while len(hitsound_values) < total_edges:
+                hitsound_values.append("0")
 
-            # Now process the endsounds (if any)
-            endsounds = hit_object_xml.attrib.get("endsounds", "").split("|")
-            if endsounds and endsounds[0]:
-                for i in range(len(endsounds)):
-                    if i < len(hit_sounds):
-                        additional_endsound = int(endsounds[i])
-                        if additional_endsound != int(main_hitsound) and additional_endsound != 0:
-                            hit_sounds[-(i + 1)] = str(int(hit_sounds[-(i + 1)]) + additional_endsound)
+            # Decode main hitsound
+            main_hitsound_set = decode_hitsound(main_hitsound_val)
 
-            hit_sounds = "|".join(hit_sounds)
+            edge_hitsounds = []
+            for i in range(total_edges):
+                end_val = int(endsounds_list[i]) if endsounds_list[i].isdigit() else 0
+                hs_val = int(hitsound_values[i]) if hitsound_values[i].isdigit() else 0
+
+                end_set = decode_hitsound(end_val)
+                hs_set = decode_hitsound(hs_val)
+
+                # Union all sets: normal(16) is implicit, so we just combine sets:
+                # Also add the main_hitsound_set if needed. The question: Should main hitsound apply to all edges?
+                # By looking at examples, main hitsound =0 often. If main_hitsound is not zero, let's union it too:
+                combined = main_hitsound_set.union(end_set).union(hs_set)
+
+                # Encode back with normal (16)
+                final_val = encode_hitsound(combined)
+                edge_hitsounds.append(str(final_val))
+
+            # Join edge hitsounds with |
+            edge_hitsound_str = "|".join(edge_hitsounds)
 
             hit_objects.append({
                 "type": object_type,
@@ -118,10 +168,11 @@ def parse_xml(file_path):
                 "points": points,
                 "length": length,
                 "backtracks": backtracks,
-                "hitsound": hit_sounds
+                "hitsound": edge_hitsound_str
             })
+
         elif hit_object_type == "4":  # Spinner
-            object_type = 12  # Spinners are always 12 in osu!
+            object_type = 12
             end_offset = hit_object_xml.attrib.get("endOffset")
             hit_objects.append({
                 "type": object_type,
@@ -129,21 +180,23 @@ def parse_xml(file_path):
                 "y": y,
                 "offset": offset,
                 "end_offset": end_offset,
-                "hitsound": hit_object_xml.attrib.get("hitsound", "0")
-            })
-        elif hit_object_type == "8":  # Hold note (treated as slider for now)
-            object_type = 128  # For hold notes
-            end_offset = hit_object_xml.attrib.get("endOffset")
-            hit_objects.append({
-                "type": object_type,
-                "x": "256",  # Center of osu! screen
-                "y": "192",  # Center of osu! screen
-                "offset": offset,
-                "end_offset": end_offset,
-                "hitsound": hit_object_xml.attrib.get("hitsound", "0")
+                "hitsound": main_hitsound_val
             })
 
-        first_object = False  # After the first hit object
+        elif hit_object_type == "8":  # Hold note
+            object_type = 128
+            end_offset = hit_object_xml.attrib.get("endOffset")
+            # For hold notes, typically center them:
+            hit_objects.append({
+                "type": object_type,
+                "x": "256",
+                "y": "192",
+                "offset": offset,
+                "end_offset": end_offset,
+                "hitsound": main_hitsound_val
+            })
+
+        first_object = False
 
     # Extract colors
     colors = []
@@ -297,8 +350,8 @@ def convert_to_osu(data, output_file):
                 f.write(f"{x},{y},{offset},128,{hit_object['hitsound']},{hit_object['end_offset']},0:0:0:0\n")
 
 def main():
-    input_file = "FILE NAME GOES HERE.hbxml"
-    output_file = "FILE NAME GOES HERE.osu"
+    input_file = "Drop - Granat (TheHowl) [Pro].hbxml"
+    output_file = "Drop - Granat (TheHowl) [Pro].osu"
 
     # Parse the XML file
     data = parse_xml(input_file)
